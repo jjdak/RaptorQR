@@ -3,7 +3,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, normalize, parse, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 
@@ -142,7 +142,9 @@ function viteFsPath(url: string): string | null {
   const idx = url.indexOf(marker);
   if (idx < 0) return null;
   const rawPath = decodeURIComponent(url.slice(idx + marker.length));
-  return normalize(rawPath);
+  // URL normalization can collapse Vite's `/@fs//absolute/path` form into
+  // `/@fs/absolute/path`. Restore the filesystem root in that case.
+  return normalize(isAbsolute(rawPath) ? rawPath : resolve(parse(repoRoot).root, rawPath));
 }
 
 function repoRelativeFsPath(url: string): string | null {

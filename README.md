@@ -67,6 +67,7 @@ lives in `apps/web`.
 
 * Browser sender/receiver for text and file transfer
 * Improved sender/receiver UI for live playback, scanning, tuning, and transfer status
+* Desktop screen/window capture with an interactive crop region for QR decoding
 * Terminal sender via the `raptorqr` CLI
 * Primary RaptorQ WASM fountain codec
 * JS RLNC compatible codec (Deprecated)
@@ -113,6 +114,31 @@ Build everything:
 ```bash
 pnpm build
 ```
+
+### Offline deployment bundle
+
+Build a self-contained folder that can be copied to a computer without an
+Internet connection:
+
+```bash
+pnpm build:offline
+```
+
+The result is written to `release/raptorqr-offline/`. Copy that whole folder
+to the offline computer, then run `start-windows.cmd` on Windows or
+`start-unix.sh` on macOS/Linux. The launcher starts a loopback-only static
+server and opens `http://localhost:4173`; no project dependencies or remote
+runtime assets are needed. Windows can use its built-in PowerShell fallback;
+macOS/Linux needs Python 3 or Node.js.
+
+Do not double-click `web/index.html`. Browsers block the ES modules, Web
+Workers, and WASM used by RaptorQR when they are loaded directly through a
+`file://` URL.
+
+The local launcher supports the camera on the same computer because
+`localhost` is a secure browser context. A phone opening an HTTP LAN address
+still cannot use its camera; use `GIF File`, install the PWA while HTTPS is
+available, or provide a trusted HTTPS endpoint on the offline LAN.
 
 ### Deploy Web App On Vercel
 

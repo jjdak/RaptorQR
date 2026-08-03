@@ -1,7 +1,8 @@
 /**
- * Receiver page — camera preview, QR decode, GIF file upload mode,
+ * Receiver page — camera/screen-region preview, QR decode, GIF file upload,
  * file download, and text display.
  */
+import type { TargetedPointerEvent } from 'preact';
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import { parseGif, renderGifFrame } from '@raptorqr/core/gif/gif_parser';
 import {
@@ -24,6 +25,15 @@ import {
   normalizeReceiverFecCodec,
   type ReceiverFecCodec,
 } from '@raptorqr/core/fec/codec';
+import {
+  FULL_CAPTURE_REGION,
+  captureRegionFromPoints,
+  captureRegionToPixels,
+  fitCaptureSize,
+  pointInCaptureElement,
+  type NormalizedCaptureRegion,
+  type NormalizedPoint,
+} from '@/lib/capture_region';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -33,7 +43,7 @@ interface ReceivedFile {
   mime: string;
 }
 
-type InputMode = 'camera' | 'gif-file';
+type InputMode = 'camera' | 'screen' | 'gif-file';
 
 type CSSProps = Record<string, string | number>;
 type DecodeRateSample = { time: number; count: number };
@@ -42,6 +52,7 @@ const MIN_SCAN_RATE_FPS = 2;
 const MAX_SCAN_RATE_FPS = 60;
 const DEFAULT_SCAN_RATE_FPS = 60;
 const DECODE_RATE_WINDOW_MS = 1000;
+const MIN_SCREEN_REGION_SIZE = 0.02;
 const DECODE_PRESET_OPTIONS: DecodePresetId[] = ['fast', 'balance', 'robust', 'custom'];
 const RECEIVER_FEC_CODEC_OPTIONS: ReceiverFecCodec[] = [
   'auto',
@@ -229,9 +240,16 @@ export function ReceiverPage() {
   const animRef = useRef<number>(0);
   const scanningRef = useRef(false);
   const captureSizeRef = useRef({ width: 0, height: 0 });
+  const captureRegionRef = useRef<NormalizedCaptureRegion>(FULL_CAPTURE_REGION);
+  const screenSelectionStartRef = useRef<NormalizedPoint | null>(null);
+  const screenSelectionPreviousRef = useRef<NormalizedCaptureRegion>(FULL_CAPTURE_REGION);
 
   const [inputMode, setInputMode] = useState<InputMode>('camera');
   const [scanning, setScanning] = useState(false);
+  const [screenSharing, setScreenSharing] = useState(false);
+  const [screenRegion, setScreenRegion] = useState<NormalizedCaptureRegion>(FULL_CAPTURE_REGION);
+  const [screenDimensions, setScreenDimensions] = useState({ width: 0, height: 0 });
+  const [screenSourceLabel, setScreenSourceLabel] = useState('');
   const [status, setStatus] = useState('');
   const [totalFrames, setTotalFrames] = useState(0);
   const [framesWithQR, setFramesWithQR] = useState(0);
@@ -461,8 +479,7 @@ export function ReceiverPage() {
     setDecodeSettings((current) => ({ ...current, [key]: value }));
   }, []);
 
-  // ── Start camera scanning ───────────────────────────────────────────────
-  const startCameraScanning = useCallback(async () => {
+  const resetReceiverState = useCallback(() => {
     setError('');
     setReceivedFile(null);
     setReceivedText('');
@@ -485,6 +502,42 @@ export function ReceiverPage() {
     dataLengthRef.current = 0;
     decodedQrCountRef.current = 0;
     decodedQrRateSamplesRef.current = [];
+  }, []);
+
+  const updateScreenRegion = useCallback((region: NormalizedCaptureRegion) => {
+    captureRegionRef.current = region;
+    setScreenRegion(region);
+  }, []);
+
+  const startRealtimeDecoder = useCallback((nextStatus: string) => {
+    const worker = createWorker();
+    worker.postMessage({
+      type: 'settings',
+      settings: decodeSettingsRef.current,
+      fecCodec: fecCodecRef.current,
+    });
+    workerRef.current = worker;
+
+    setScanning(true);
+    scanningRef.current = true;
+    setStatus(nextStatus);
+
+    let lastCapture = 0;
+    const loop = (time: number) => {
+      if (!scanningRef.current) return;
+      if (time - lastCapture >= scanIntervalMsRef.current) {
+        captureFrame();
+        lastCapture = time;
+      }
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
+  }, []);
+
+  // ── Start camera scanning ───────────────────────────────────────────────
+  const startCameraScanning = useCallback(async () => {
+    resetReceiverState();
+    captureRegionRef.current = FULL_CAPTURE_REGION;
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError(getCameraUnavailableMessage());
@@ -516,32 +569,103 @@ export function ReceiverPage() {
         await videoRef.current.play();
       }
 
-      const worker = createWorker();
-      worker.postMessage({
-        type: 'settings',
-        settings: decodeSettingsRef.current,
-        fecCodec: fecCodecRef.current,
-      });
-      workerRef.current = worker;
-
-      setScanning(true);
-      scanningRef.current = true;
-      setStatus('Scanning…');
-
-      let lastCapture = 0;
-      const loop = (time: number) => {
-        if (!scanningRef.current) return;
-        if (time - lastCapture >= scanIntervalMsRef.current) {
-          captureFrame();
-          lastCapture = time;
-        }
-        animRef.current = requestAnimationFrame(loop);
-      };
-      animRef.current = requestAnimationFrame(loop);
+      startRealtimeDecoder('Scanning camera…');
     } catch (err: any) {
       setError(`Camera error: ${err.message ?? String(err)}`);
     }
+  }, [resetReceiverState, startRealtimeDecoder]);
+
+  // ── Select a desktop screen/window and crop region ────────────────────
+  const startScreenSharing = useCallback(async () => {
+    resetReceiverState();
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setError(getScreenCaptureUnavailableMessage());
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 60, max: 60 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+
+      const track = stream.getVideoTracks()[0];
+      if (!track) throw new Error('The selected source did not provide a video track.');
+
+      const video = videoRef.current;
+      if (!video) throw new Error('Screen preview is unavailable.');
+      video.srcObject = stream;
+      await video.play();
+      await waitForVideoDimensions(video);
+
+      updateScreenRegion(FULL_CAPTURE_REGION);
+      setScreenDimensions({ width: video.videoWidth, height: video.videoHeight });
+      setScreenSourceLabel(track.label || formatDisplaySurface(track.getSettings().displaySurface));
+      setScreenSharing(true);
+      setStatus('Screen ready — drag over the preview to select a scan region.');
+
+      track.addEventListener('ended', () => {
+        if (streamRef.current === stream) stopScanning('Screen sharing ended');
+      }, { once: true });
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError') {
+        setStatus('Screen selection cancelled.');
+        return;
+      }
+      setError(`Screen capture error: ${err.message ?? String(err)}`);
+    }
+  }, [resetReceiverState, updateScreenRegion]);
+
+  const startScreenScanning = useCallback(() => {
+    if (!screenSharing || !streamRef.current || !videoRef.current) {
+      setError('Choose a screen, window, or browser tab before starting the region scan.');
+      return;
+    }
+    resetReceiverState();
+    startRealtimeDecoder('Scanning selected screen region…');
+  }, [resetReceiverState, screenSharing, startRealtimeDecoder]);
+
+  const screenPoint = useCallback((event: TargetedPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return pointInCaptureElement(
+      event.clientX,
+      event.clientY,
+      rect.left,
+      rect.top,
+      rect.width,
+      rect.height,
+    );
   }, []);
+
+  const handleScreenRegionPointerDown = useCallback((event: TargetedPointerEvent<HTMLDivElement>) => {
+    if (!screenSharing) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    screenSelectionPreviousRef.current = captureRegionRef.current;
+    screenSelectionStartRef.current = screenPoint(event);
+  }, [screenPoint, screenSharing]);
+
+  const handleScreenRegionPointerMove = useCallback((event: TargetedPointerEvent<HTMLDivElement>) => {
+    const start = screenSelectionStartRef.current;
+    if (!start) return;
+    event.preventDefault();
+    updateScreenRegion(captureRegionFromPoints(start, screenPoint(event)));
+  }, [screenPoint, updateScreenRegion]);
+
+  const finishScreenRegionSelection = useCallback((event: TargetedPointerEvent<HTMLDivElement>) => {
+    if (!screenSelectionStartRef.current) return;
+    event.preventDefault();
+    const region = captureRegionRef.current;
+    if (region.width < MIN_SCREEN_REGION_SIZE || region.height < MIN_SCREEN_REGION_SIZE) {
+      updateScreenRegion(screenSelectionPreviousRef.current);
+    }
+    screenSelectionStartRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, [updateScreenRegion]);
 
   // ── Process GIF file ───────────────────────────────────────────────────
   const handleGifFile = useCallback(async (e: Event) => {
@@ -550,28 +674,7 @@ export function ReceiverPage() {
     if (!file) return;
 
     setGifFileName(`${file.name} · ${formatBytes(file.size)}`);
-    setError('');
-    setReceivedFile(null);
-    setReceivedText('');
-    setTextCopied(false);
-    setTotalFrames(0);
-    setFramesWithQR(0);
-    setUniquePackets(0);
-    setDuplicatePackets(0);
-    setAcceptedPackets(0);
-    setNeededPackets(0);
-    setDetectedQrVersion(0);
-    setDetectedSymbolSize(0);
-    setDetectedFecCodec('');
-    setDecodedQrPerSecond(0);
-    setElapsedMs(0);
-    setThroughputKbps(0);
-    setSolvedGens(0);
-    setSourceGens(0);
-    scanStartRef.current = 0;
-    dataLengthRef.current = 0;
-    decodedQrCountRef.current = 0;
-    decodedQrRateSamplesRef.current = [];
+    resetReceiverState();
 
     const worker = createWorker();
     worker.postMessage({
@@ -614,10 +717,10 @@ export function ReceiverPage() {
       scanningRef.current = false;
       setScanning(false);
     }
-  }, []);
+  }, [resetReceiverState]);
 
   // ── Stop scanning ──────────────────────────────────────────────────────────
-  const stopScanning = useCallback(() => {
+  function stopScanning(nextStatus = 'Stopped') {
     setScanning(false);
     scanningRef.current = false;
     cancelAnimationFrame(animRef.current);
@@ -634,13 +737,17 @@ export function ReceiverPage() {
       workerRef.current.terminate();
       workerRef.current = null;
     }
-    setStatus('Stopped');
+    setStatus(nextStatus);
     setHasZoomSupport(false);
     setZoomLevel(1);
-  }, []);
+    setScreenSharing(false);
+    setScreenDimensions({ width: 0, height: 0 });
+    setScreenSourceLabel('');
+    screenSelectionStartRef.current = null;
+  }
 
 
-  // ── Capture the full camera frame ─────────────────────────────────────────
+  // ── Capture the active camera frame or selected screen region ─────────────
   const captureFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -652,25 +759,25 @@ export function ReceiverPage() {
 
     const vw = video.videoWidth || 640;
     const vh = video.videoHeight || 640;
-
-    // Output canvas size: cap at 640 for performance, but preserve aspect ratio
-    const maxCanvas = 640;
-    const aspect = vw / vh;
-    let cw: number, ch: number;
-    if (aspect >= 1) {
-      cw = Math.min(vw, maxCanvas);
-      ch = Math.round(cw / aspect);
-    } else {
-      ch = Math.min(vh, maxCanvas);
-      cw = Math.round(ch * aspect);
-    }
+    const source = captureRegionToPixels(captureRegionRef.current, vw, vh);
+    const { width: cw, height: ch } = fitCaptureSize(source.width, source.height);
     if (captureSizeRef.current.width !== cw || captureSizeRef.current.height !== ch) {
       canvas.width = cw;
       canvas.height = ch;
       captureSizeRef.current = { width: cw, height: ch };
     }
 
-    ctx.drawImage(video, 0, 0, vw, vh, 0, 0, cw, ch);
+    ctx.drawImage(
+      video,
+      source.x,
+      source.y,
+      source.width,
+      source.height,
+      0,
+      0,
+      cw,
+      ch,
+    );
     const imageData = ctx.getImageData(0, 0, cw, ch);
     const pixels = imageData.data.buffer as ArrayBuffer;
 
@@ -746,6 +853,12 @@ export function ReceiverPage() {
             onClick={() => { stopScanning(); setInputMode('camera'); }}
           >
             📷 Camera
+          </button>
+          <button
+            style={S.toggleBtn(inputMode === 'screen')}
+            onClick={() => { stopScanning(); setInputMode('screen'); }}
+          >
+            🖥️ Screen Region
           </button>
           <button
             style={S.toggleBtn(inputMode === 'gif-file')}
@@ -995,7 +1108,7 @@ export function ReceiverPage() {
                 ▶ Start Scan
               </button>
             ) : (
-              <button style={S.btnStop} onClick={stopScanning}>
+              <button style={S.btnStop} onClick={() => stopScanning()}>
                 ■ Stop Scan
               </button>
             )}
@@ -1019,6 +1132,144 @@ export function ReceiverPage() {
             {hasZoomSupport
               ? 'Full-frame scan is active. Use Zoom only if the QR codes are too small.'
               : 'Full-frame scan is active.'}
+          </p>
+          {error && <div style={S.warn}>⚠ {error}</div>}
+        </div>
+      )}
+
+      {/* ── Desktop screen/window region capture ─────────────────────────────── */}
+      {inputMode === 'screen' && (
+        <div style={S.section}>
+          <div style={S.label}>Screen Region</div>
+          <p style={{ fontSize: 13, color: '#8b949e', marginBottom: 12 }}>
+            Choose a screen, window, or browser tab. Then drag a rectangle over the preview and scan only that region.
+          </p>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={S.label}>Scan rate</span>
+              <span style={S.statValue}>{scanRateFps} fps · {formatDelayMs(scanIntervalMs)} ms/sample</span>
+            </div>
+            <input
+              type="range"
+              min={MIN_SCAN_RATE_FPS}
+              max={MAX_SCAN_RATE_FPS}
+              step={1}
+              value={scanRateFps}
+              style={S.slider}
+              onInput={(e) => handleScanRateChange((e.target as HTMLInputElement).value)}
+            />
+            <div style={S.sliderLabels}>
+              <span>Stable</span>
+              <span>Fast</span>
+            </div>
+          </div>
+
+          {screenSharing && (
+            <div style={{ marginBottom: 8, fontSize: 13, color: '#8b949e' }}>
+              <span style={{ color: '#c9d1d9' }}>{screenSourceLabel || 'Shared display'}</span>
+              {' '}·{' '}
+              selected <span style={S.statValue}>{formatScreenRegion(screenRegion, screenDimensions)}</span>
+            </div>
+          )}
+
+          <div
+            ref={videoContainerRef}
+            style={{
+              position: 'relative',
+              display: screenSharing ? 'inline-block' : 'none',
+              maxWidth: 760,
+              width: '100%',
+              lineHeight: 0,
+              userSelect: 'none',
+            }}
+          >
+            <video
+              ref={videoRef}
+              style={{ width: '100%', borderRadius: 6, background: '#000', display: 'block' }}
+              playsInline
+              muted
+            />
+            <div
+              aria-label="Drag to select the screen region to scan"
+              onPointerDown={handleScreenRegionPointerDown}
+              onPointerMove={handleScreenRegionPointerMove}
+              onPointerUp={finishScreenRegionSelection}
+              onPointerCancel={finishScreenRegionSelection}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                cursor: 'crosshair',
+                touchAction: 'none',
+                borderRadius: 6,
+              }}
+            />
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: `${screenRegion.y * 100}%`, background: 'rgba(0, 0, 0, 0.48)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', left: 0, right: 0, top: `${(screenRegion.y + screenRegion.height) * 100}%`, bottom: 0, background: 'rgba(0, 0, 0, 0.48)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', left: 0, top: `${screenRegion.y * 100}%`, width: `${screenRegion.x * 100}%`, height: `${screenRegion.height * 100}%`, background: 'rgba(0, 0, 0, 0.48)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', left: `${(screenRegion.x + screenRegion.width) * 100}%`, right: 0, top: `${screenRegion.y * 100}%`, height: `${screenRegion.height * 100}%`, background: 'rgba(0, 0, 0, 0.48)', pointerEvents: 'none' }} />
+            <div
+              style={{
+                position: 'absolute',
+                left: `${screenRegion.x * 100}%`,
+                top: `${screenRegion.y * 100}%`,
+                width: `${screenRegion.width * 100}%`,
+                height: `${screenRegion.height * 100}%`,
+                border: '2px solid #58a6ff',
+                boxShadow: '0 0 0 1px rgba(13, 17, 23, 0.8)',
+                pointerEvents: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+          {scanning && (
+            <div style={S.statsBar}>
+              <span>decoded <span style={S.statValue}>{framesWithQR}</span></span>
+              <span>unique <span style={S.statValue}>{uniquePackets}</span></span>
+              <span>useful <span style={S.statValue}>{acceptedPackets}/{neededPackets || '?'}</span></span>
+              {duplicatePackets > 0 && <span>dupes <span style={S.statValue}>{duplicatePackets}</span></span>}
+              <span>gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span></span>
+              <span>QR <span style={S.statValue}>{formatDetectedQR(detectedQrVersion, detectedSymbolSize)}</span></span>
+              {detectedFecCodec && <span>FEC <span style={S.statValue}>{formatDetectedFecCodec(detectedFecCodec)}</span></span>}
+              <span>decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span></span>
+              <span>time <span style={S.statValue}>{formatDuration(elapsedMs)}</span></span>
+              {throughputKbps > 0 && <span>speed <span style={S.statValue}>{throughputKbps.toFixed(1)} KB/s</span></span>}
+              <span>·</span>
+              <span>{status || 'Working…'}</span>
+            </div>
+          )}
+
+          <div style={{ ...S.row, marginTop: 12 }}>
+            {!screenSharing && (
+              <button style={S.btn} onClick={startScreenSharing}>
+                🖥 Choose Screen / Window
+              </button>
+            )}
+            {screenSharing && !scanning && (
+              <button style={S.btn} onClick={startScreenScanning}>
+                ▶ Start Region Scan
+              </button>
+            )}
+            {screenSharing && scanning && (
+              <button style={S.btnStop} onClick={() => stopScanning()}>
+                ■ Stop Scan & Sharing
+              </button>
+            )}
+            {screenSharing && !scanning && (
+              <>
+                <button style={S.btnSecondary} onClick={() => updateScreenRegion(FULL_CAPTURE_REGION)}>
+                  Full Frame
+                </button>
+                <button style={S.btnSecondary} onClick={() => stopScanning()}>
+                  Stop Sharing
+                </button>
+              </>
+            )}
+          </div>
+          <p style={{ fontSize: 12, color: '#8b949e', marginTop: 8 }}>
+            The browser always asks you to choose a share source. RaptorQR crops the selected rectangle locally before decoding and does not transmit the captured pixels.
           </p>
           {error && <div style={S.warn}>⚠ {error}</div>}
         </div>
@@ -1215,6 +1466,24 @@ function formatDetectedFecCodec(value: string): string {
   return value;
 }
 
+function formatScreenRegion(
+  region: NormalizedCaptureRegion,
+  dimensions: { width: number; height: number },
+): string {
+  if (dimensions.width <= 0 || dimensions.height <= 0) {
+    return `${Math.round(region.width * 100)}% × ${Math.round(region.height * 100)}%`;
+  }
+  const pixels = captureRegionToPixels(region, dimensions.width, dimensions.height);
+  return `${pixels.width}×${pixels.height} @ ${pixels.x},${pixels.y}`;
+}
+
+function formatDisplaySurface(value: string | undefined): string {
+  if (value === 'monitor') return 'Shared screen';
+  if (value === 'window') return 'Shared window';
+  if (value === 'browser') return 'Shared browser tab';
+  return 'Shared display';
+}
+
 function clampScanRate(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SCAN_RATE_FPS;
   return Math.min(MAX_SCAN_RATE_FPS, Math.max(MIN_SCAN_RATE_FPS, Math.round(value)));
@@ -1269,4 +1538,31 @@ function getCameraUnavailableMessage(): string {
     return 'Camera API is unavailable because this page is not in a secure context. Use HTTPS, localhost, or upload a GIF instead.';
   }
   return 'Camera API is unavailable in this browser. Try a recent Chrome/Safari/Edge browser, or upload a GIF instead.';
+}
+
+function getScreenCaptureUnavailableMessage(): string {
+  if (!window.isSecureContext) {
+    return 'Screen capture requires HTTPS or localhost. Open the offline app through its localhost launcher.';
+  }
+  return 'Screen capture is unavailable in this browser. Try a recent desktop Chrome, Edge, Firefox, or Safari browser.';
+}
+
+async function waitForVideoDimensions(video: HTMLVideoElement): Promise<void> {
+  if (video.videoWidth > 0 && video.videoHeight > 0) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for the shared screen preview.'));
+    }, 5000);
+    const onLoadedMetadata = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+    video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+  });
 }
