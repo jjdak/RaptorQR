@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "README.txt",
-      "bytes": 1376,
-      "sha256": "701171ee948bd5240906183710712b6b8c2f28c3baf0f1c25237f7e334850249"
+      "bytes": 1585,
+      "sha256": "a62c3f3dc904faaa8fe5d657299e3fa8cb0191c7477d01d9a272ffbd67e8172e"
     },
     {
       "path": "offline-server.mjs",
@@ -24,8 +24,8 @@
     },
     {
       "path": "start-unix.sh",
-      "bytes": 413,
-      "sha256": "d0667abb9bc8823cd2136ffa12bc1bc16f9b5267d5301e91f494e04cd57934b0"
+      "bytes": 873,
+      "sha256": "a95c9297b5babadb5e9aee0afd4c57dac6b533cc60e898eb03956d1fa206ac8f"
     },
     {
       "path": "start-windows.cmd",
