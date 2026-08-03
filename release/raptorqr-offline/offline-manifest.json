@@ -1,0 +1,106 @@
+{
+  "name": "RaptorQR offline deployment",
+  "version": "0.1.0",
+  "files": [
+    {
+      "path": "README.txt",
+      "bytes": 1376,
+      "sha256": "701171ee948bd5240906183710712b6b8c2f28c3baf0f1c25237f7e334850249"
+    },
+    {
+      "path": "offline-server.mjs",
+      "bytes": 3963,
+      "sha256": "aa839288c621b208c73efc5d3c4a833bdc779635de1a1bf46bad6a84614e8165"
+    },
+    {
+      "path": "offline-server.ps1",
+      "bytes": 4106,
+      "sha256": "5a75aa043649e8e10dd10cf975be4487861675c52c75a6c6924f684bd840325d"
+    },
+    {
+      "path": "offline-server.py",
+      "bytes": 2598,
+      "sha256": "57b3602c57fb59bc46822239d6ad3f7d44fc01d90d3b543538fd4210fe3b25d7"
+    },
+    {
+      "path": "start-unix.sh",
+      "bytes": 413,
+      "sha256": "d0667abb9bc8823cd2136ffa12bc1bc16f9b5267d5301e91f494e04cd57934b0"
+    },
+    {
+      "path": "start-windows.cmd",
+      "bytes": 463,
+      "sha256": "3d75baae45a08827f845138037a8988c2dc69282ed2d2d1781522ab98e1d1ea4"
+    },
+    {
+      "path": "web/README.md",
+      "bytes": 1498,
+      "sha256": "e32ed9a8bd6390df8f410278119e431e35ff8f354d1bcdc71cd8db5d4bd09b45"
+    },
+    {
+      "path": "web/assets/decode.worker-CMAqArjK.js",
+      "bytes": 60847,
+      "sha256": "7a72d9b53176392ad544e17b407f48c5298df62bac1a1eca3147bd2ff2c7e3f4"
+    },
+    {
+      "path": "web/assets/encode.worker-j6EDDCCU.js",
+      "bytes": 19580,
+      "sha256": "2e90e4a69654843b0e47d98949c77246f512306cd9729cd9ad13e71874904aa7"
+    },
+    {
+      "path": "web/assets/gif.worker-Bn7t6tBQ.js",
+      "bytes": 41854,
+      "sha256": "4493bb1b224e036f82a5b584776099a178c74dbeded8f608ff749271cf7c0d49"
+    },
+    {
+      "path": "web/assets/index-CgIfLPOK.js",
+      "bytes": 84467,
+      "sha256": "e236ae02b7b0d815906cfe96712b0a594a3dd308f1b6d5230c6fae2c1741320c"
+    },
+    {
+      "path": "web/assets/qr_render.worker-BTeIcqWC.js",
+      "bytes": 36430,
+      "sha256": "83c69ca49fa7f13a72bbb5e83bbd2bc208de5ff50a8d6c8b54a4afe1cc3ceca3"
+    },
+    {
+      "path": "web/assets/raptorqr_fast_qr_wasm_bg-DEFhihBP.wasm",
+      "bytes": 57425,
+      "sha256": "707101da64f25b302b72869bf7a86b747208480ea5c6f10941b74e87da134b0e"
+    },
+    {
+      "path": "web/assets/raptorqr_raptorq_wasm_bg-C7Shp1E2.wasm",
+      "bytes": 199574,
+      "sha256": "8c3129658695795a328da352af3ddaff7a966859f04db032c445e32100abab5e"
+    },
+    {
+      "path": "web/assets/zxing_reader-B47v7G7e.wasm",
+      "bytes": 1089670,
+      "sha256": "b03d35cd265123b9f75a0c476c204714663a1e85ba908acc3f50eae7824dfcf6"
+    },
+    {
+      "path": "web/assets/zxing_writer-NQHybxPU.wasm",
+      "bytes": 648568,
+      "sha256": "b4b6c00fccfd83c1e08598ae82ec14cb8f1bd43dddf47ea0c725b08d558027a5"
+    },
+    {
+      "path": "web/index.html",
+      "bytes": 2519,
+      "sha256": "9ac393f7339b9fd5bf646be769df1e77406afbf8352ac7c2109325256b49a90b"
+    },
+    {
+      "path": "web/manifest.webmanifest",
+      "bytes": 411,
+      "sha256": "9a384edd040d2ee5db7389264b928e8e66b84c29807f84fab4fc1b18f78a3e4e"
+    },
+    {
+      "path": "web/raptorqr.svg",
+      "bytes": 776,
+      "sha256": "fee12a729ad9b0e02bfcf61d20d8904c73187fa3674d25b8544eac15bae03cdd"
+    },
+    {
+      "path": "web/sw.js",
+      "bytes": 2301,
+      "sha256": "32c66caef13da931d1b38c1f17fce9a0edaac6f54378819af471b08150ad6844"
+    }
+  ]
+}
